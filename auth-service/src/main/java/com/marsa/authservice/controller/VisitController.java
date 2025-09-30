@@ -1,9 +1,11 @@
+// src/main/java/com/marsa/authservice/controller/VisitController.java
 package com.marsa.authservice.controller;
 
 import com.marsa.authservice.dto.CreateVisitRequest;
 import com.marsa.authservice.dto.UpsertDapRequest;
 import com.marsa.authservice.dto.UpsertDapResponse;
-import com.marsa.authservice.dto.VisitDetailDto;          // <-- AJOUT
+import com.marsa.authservice.dto.VisitDetailDto;
+import com.marsa.authservice.dto.VisitDetailDto.DapDto;
 import com.marsa.authservice.model.Dap;
 import com.marsa.authservice.model.Visit;
 import com.marsa.authservice.model.VisitStatus;
@@ -21,7 +23,10 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
-import java.util.*;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 import static org.springframework.format.annotation.DateTimeFormat.ISO;
 
@@ -44,6 +49,8 @@ public class VisitController {
         return (s == null) ? null : s.replaceAll("\\D", "");
     }
 
+    /* ===================== AD ===================== */
+
     /** Création AD (= création d'une visite) */
     @PostMapping
     public ResponseEntity<Map<String, Object>> create(@RequestBody CreateVisitRequest req) {
@@ -57,24 +64,23 @@ public class VisitController {
         return ResponseEntity.status(HttpStatus.CREATED).body(body);
     }
 
-    /** Prochain numéro si tu veux l’afficher côté UI */
+    /** Prochain numéro si tu veux l’afficher côté UI (placeholder) */
     @GetMapping("/next-ad")
     public Map<String, String> nextAd() {
-        return Map.of("adNumber", "preview-only"); // à implémenter si besoin
+        return Map.of("adNumber", "preview-only");
     }
 
     /** Récupération d'une visite par id numérique OU par numéro AD (>=9 chiffres) */
     @GetMapping("/{idOrNumber}")
     public ResponseEntity<VisitDetailDto> getOne(@PathVariable String idOrNumber) {
-        // Cas 1 : ressemble à un numéro AD (ex: 202509006)
+        // 1) ressemble à un numéro AD (ex: 202509006)
         if (idOrNumber.matches("\\d{9,}")) {
             return repo.findByAdNumber(idOrNumber)
                     .map(this::toDetail)
                     .map(ResponseEntity::ok)
                     .orElse(ResponseEntity.notFound().build());
         }
-
-        // Cas 2 : essaye comme id numérique
+        // 2) sinon, essaye comme id
         try {
             long id = Long.parseLong(idOrNumber);
             return repo.findById(id)
@@ -118,10 +124,10 @@ public class VisitController {
             spec = spec.and((root, q, cb) -> cb.equal(root.get("adNumber"), number));
 
         if (etaFrom != null) spec = spec.and((r, q, cb) -> cb.greaterThanOrEqualTo(r.get("eta"), etaFrom));
-        if (etaTo != null) spec = spec.and((r, q, cb) -> cb.lessThanOrEqualTo(r.get("eta"), etaTo));
+        if (etaTo   != null) spec = spec.and((r, q, cb) -> cb.lessThanOrEqualTo(r.get("eta"), etaTo));
 
         if (etdFrom != null) spec = spec.and((r, q, cb) -> cb.greaterThanOrEqualTo(r.get("etd"), etdFrom));
-        if (etdTo != null) spec = spec.and((r, q, cb) -> cb.lessThanOrEqualTo(r.get("etd"), etdTo));
+        if (etdTo   != null) spec = spec.and((r, q, cb) -> cb.lessThanOrEqualTo(r.get("etd"), etdTo));
 
         if (statuses != null && !statuses.isEmpty())
             spec = spec.and((r, q, cb) -> r.get("statut").in(statuses));
@@ -139,13 +145,13 @@ public class VisitController {
 
         Page<Map<String, Object>> dto = page.map(v -> {
             Map<String, Object> m = new LinkedHashMap<>();
-            m.put("id", v.getId());
-            m.put("visitNumber", v.getAdNumber()); // alias
-            m.put("agentId", v.getAgentId());
-            m.put("navireImo", v.getNavireImo());
-            m.put("eta", v.getEta());
-            m.put("etd", v.getEtd());
-            m.put("statut", v.getStatut());
+            m.put("id",           v.getId());
+            m.put("visitNumber",  v.getAdNumber()); // alias
+            m.put("agentId",      v.getAgentId());
+            m.put("navireImo",    v.getNavireImo());
+            m.put("eta",          v.getEta());
+            m.put("etd",          v.getEtd());
+            m.put("statut",       v.getStatut());
             return m;
         });
 
@@ -172,11 +178,11 @@ public class VisitController {
         return ResponseEntity.ok(new UpsertDapResponse(d.getId(), id, d.getDateDap(), d.getEta()));
     }
 
-    /** Suppression du DAP de la visite */
+    /** Suppression du DAP : on renvoie la visite mise à jour (hasDap=false, statut=PREVU) */
     @DeleteMapping("/{id}/dap")
-    public ResponseEntity<Void> deleteDap(@PathVariable Long id) {
-        service.deleteDap(id);
-        return ResponseEntity.noContent().build();
+    public ResponseEntity<VisitDetailDto> deleteDap(@PathVariable Long id) {
+        Visit v = service.deleteDap(id);
+        return ResponseEntity.ok(toDetail(v));
     }
 
     /** (optionnel) Récupérer le DAP de la visite */
@@ -185,7 +191,18 @@ public class VisitController {
         return dapRepo.findByVisitId(id).map(ResponseEntity::ok).orElse(ResponseEntity.notFound().build());
     }
 
+    /* ===================== Statut ===================== */
+
+    /** Changer le statut (PREVU, VALIDE, ACTIVE, CLOTURE, ANNULE) */
+    @PutMapping("/{id}/status")
+    public ResponseEntity<VisitDetailDto> setStatus(@PathVariable Long id, @RequestBody Map<String, String> body) {
+        VisitStatus s = VisitStatus.valueOf(body.get("statut"));
+        Visit v = service.setStatus(id, s);
+        return ResponseEntity.ok(toDetail(v));
+    }
+
     /* ===================== Mapper entité -> DTO ===================== */
+
     private VisitDetailDto toDetail(Visit v) {
         VisitDetailDto d = new VisitDetailDto();
         d.id = v.getId();
@@ -200,6 +217,22 @@ public class VisitController {
         d.portUnload = v.getPortUnload();
         d.statut = v.getStatut();
         d.hasDap = v.isHasDap();
+
+        // Peupler le bloc DAP si existant
+        dapRepo.findByVisitId(v.getId()).ifPresent(dap -> {
+            DapDto dd = new DapDto();
+            dd.id = dap.getId();
+            dd.dateDap = dap.getDateDap();
+            dd.eta = dap.getEta();
+            dd.etd = dap.getEtd();
+            dd.navireImo = dap.getNavireImo();
+            dd.terminalCode = dap.getTerminalCode();
+            dd.agentId = dap.getAgentId();
+            dd.portLoad = dap.getPortLoad();
+            dd.portUnload = dap.getPortUnload();
+            d.dap = dd;
+        });
+
         return d;
     }
 }

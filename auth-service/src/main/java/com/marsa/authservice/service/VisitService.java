@@ -13,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.NoSuchElementException;
 
 @Service
 public class VisitService {
@@ -27,7 +28,7 @@ public class VisitService {
         this.dapRepo = dapRepo;
     }
 
-    /* === Création AD (inchangé) === */
+    /* === Création AD === */
     @Transactional
     public Visit createFromRequest(CreateVisitRequest req) {
         Visit v = new Visit();
@@ -63,7 +64,8 @@ public class VisitService {
 
     @Transactional
     public Dap upsertDap(Long visitId, UpsertDapRequest req) {
-        Visit v = repo.findById(visitId).orElseThrow(() -> new IllegalArgumentException("Visite introuvable"));
+        Visit v = repo.findById(visitId)
+                .orElseThrow(() -> new IllegalArgumentException("Visite introuvable: " + visitId));
 
         Dap d = dapRepo.findByVisitId(visitId).orElseGet(() -> {
             Dap nd = new Dap();
@@ -80,7 +82,7 @@ public class VisitService {
         d.setPortLoad(req.getPortLoad());
         d.setPortUnload(req.getPortUnload());
 
-        // Correction “validation” : on met à jour la visite à partir du DAP
+        // synchroniser la visite
         v.setNavireImo(req.getNavireImo());
         v.setTerminalCode(req.getTerminalCode());
         v.setAgentId(req.getAgentId());
@@ -91,16 +93,30 @@ public class VisitService {
         v.setHasDap(true);
         v.setStatut(VisitStatus.VALIDE);
 
+        dapRepo.save(d);
         repo.save(v);
-        return dapRepo.save(d);
+        return d;
+    }
+
+    /** Supprime le DAP (DELETE direct) et remet la visite à PREVU + hasDap=false */
+    @Transactional
+    public Visit deleteDap(Long visitId) {
+        Visit v = repo.findById(visitId)
+                .orElseThrow(() -> new NoSuchElementException("Visite introuvable: " + visitId));
+
+        // suppression SQL directe (pas de setVisit(null))
+        dapRepo.hardDeleteByVisitId(visitId);
+
+        v.setHasDap(false);
+        v.setStatut(VisitStatus.PREVU);
+        return repo.save(v);
     }
 
     @Transactional
-    public void deleteDap(Long visitId) {
-        dapRepo.deleteByVisitId(visitId);
-        Visit v = repo.findById(visitId).orElseThrow(() -> new IllegalArgumentException("Visite introuvable"));
-        v.setHasDap(false);
-        v.setStatut(VisitStatus.PREVU);
-        repo.save(v);
+    public Visit setStatus(Long visitId, VisitStatus statut) {
+        Visit v = repo.findById(visitId)
+                .orElseThrow(() -> new NoSuchElementException("Visite introuvable: " + visitId));
+        v.setStatut(statut);
+        return repo.save(v);
     }
 }
